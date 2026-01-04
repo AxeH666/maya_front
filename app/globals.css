@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-neonPink: #ff4ecd;
+  --color-neonPurple: #b026ff;
+  --color-neonBlue: #00f0ff;
+  --color-darkBg: #050008;
+}
+
+html,
+body {
+  background: #050008;
+  color: #f8eaff;
+  height: 100%;
+  overflow: hidden;
+}
+
+::selection {
+  background: #ff4ecd;
+  color: black;
+}
