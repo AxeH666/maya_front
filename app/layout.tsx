@@ -1,4 +1,5 @@
 import "./globals.css";
+import AuthButton from "@/components/AuthButton";
 
 export default function RootLayout({
   children,
@@ -14,6 +15,7 @@ export default function RootLayout({
           <div className="absolute bottom-1/4 right-1/2 w-[400px] h-[400px] bg-neonPink opacity-20 blur-[120px] translate-x-1/2" />
         </div>
 
+        <AuthButton />
         {children}
       </body>
     </html>
