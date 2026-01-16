@@ -3,18 +3,29 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { login } from "@/lib/auth";
+import { useAuth } from "@/context/AuthContext";
 
 export default function SignupPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
+  const { signup } = useAuth();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    login();
-    router.push("/");
-    router.refresh();
+    setError("");
+    setIsLoading(true);
+
+    try {
+      await signup(email, password);
+      router.push("/");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Signup failed");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -30,6 +41,12 @@ export default function SignupPage() {
           </p>
 
           <form onSubmit={handleSubmit} className="space-y-6">
+            {error && (
+              <div className="rounded-lg bg-red-500/20 border border-red-500/50 px-4 py-3 text-red-300 text-sm">
+                {error}
+              </div>
+            )}
+
             <div>
               <label
                 htmlFor="email"
@@ -42,7 +59,9 @@ export default function SignupPage() {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full rounded-lg bg-black/40 border border-neonPurple/30 px-4 py-3 text-white outline-none placeholder:text-gray-500 focus:border-neonPink focus:shadow-[0_0_20px_rgba(255,78,205,0.4)] transition-all"
+                required
+                disabled={isLoading}
+                className="w-full rounded-lg bg-black/40 border border-neonPurple/30 px-4 py-3 text-white outline-none placeholder:text-gray-500 focus:border-neonPink focus:shadow-[0_0_20px_rgba(255,78,205,0.4)] transition-all disabled:opacity-50"
                 placeholder="your@email.com"
               />
             </div>
@@ -59,16 +78,19 @@ export default function SignupPage() {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full rounded-lg bg-black/40 border border-neonPurple/30 px-4 py-3 text-white outline-none placeholder:text-gray-500 focus:border-neonPink focus:shadow-[0_0_20px_rgba(255,78,205,0.4)] transition-all"
+                required
+                disabled={isLoading}
+                className="w-full rounded-lg bg-black/40 border border-neonPurple/30 px-4 py-3 text-white outline-none placeholder:text-gray-500 focus:border-neonPink focus:shadow-[0_0_20px_rgba(255,78,205,0.4)] transition-all disabled:opacity-50"
                 placeholder="••••••••"
               />
             </div>
 
             <button
               type="submit"
-              className="w-full rounded-lg px-6 py-3 bg-gradient-to-r from-neonPurple to-neonPink text-black font-medium shadow-[0_0_20px_rgba(255,78,205,0.6)] hover:shadow-[0_0_30px_rgba(255,78,205,0.8)] transition-all"
+              disabled={isLoading}
+              className="w-full rounded-lg px-6 py-3 bg-gradient-to-r from-neonPurple to-neonPink text-black font-medium shadow-[0_0_20px_rgba(255,78,205,0.6)] hover:shadow-[0_0_30px_rgba(255,78,205,0.8)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Sign Up
+              {isLoading ? "Signing up..." : "Sign Up"}
             </button>
           </form>
 

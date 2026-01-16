@@ -2,16 +2,16 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { logout } from "@/lib/auth";
+import { useAuth } from "@/context/AuthContext";
 
 export default function LogoutPage() {
   const router = useRouter();
+  const { logout } = useAuth();
 
   useEffect(() => {
     logout();
     router.push("/");
-    router.refresh();
-  }, [router]);
+  }, [router, logout]);
 
   return (
     <main className="relative z-10 flex h-screen flex-col items-center justify-center px-4">

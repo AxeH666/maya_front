@@ -1,59 +1,31 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import ChatBubble from "@/components/ChatBubble";
 import ChatInput from "@/components/ChatInput";
 import TypingIndicator from "@/components/TypingIndicator";
 import Sidebar from "@/components/Sidebar";
-import { isLoggedIn } from "@/lib/auth";
+import { useAuth } from "@/context/AuthContext";
+import { api } from "@/lib/api";
 
 interface Message {
   sender: "user" | "maya";
   message: string;
+  videoUrl?: string;
+  videoJobId?: string;
+  videoStatus?: "pending" | "processing" | "ready" | "failed";
 }
 
 export default function Home() {
+  const { isAuthenticated } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
-  const [loggedIn, setLoggedIn] = useState(false);
-  const [mounted, setMounted] = useState(false);
   const [activeChatId, setActiveChatId] = useState<string | undefined>(undefined);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatAreaRef = useRef<HTMLDivElement>(null);
-  const router = useRouter();
-  const pathname = usePathname();
-
-  useEffect(() => {
-    setMounted(true);
-    setLoggedIn(isLoggedIn());
-
-    // Update on route changes
-    const checkAuth = () => {
-      setLoggedIn(isLoggedIn());
-    };
-
-    // Listen for storage changes (for cross-tab updates)
-    const handleStorageChange = () => {
-      checkAuth();
-    };
-
-    // Listen for custom auth change events (for same-tab updates)
-    const handleAuthChange = () => {
-      checkAuth();
-    };
-
-    window.addEventListener("storage", handleStorageChange);
-    window.addEventListener("authchange", handleAuthChange);
-    checkAuth();
-
-    return () => {
-      window.removeEventListener("storage", handleStorageChange);
-      window.removeEventListener("authchange", handleAuthChange);
-    };
-  }, [pathname]);
+  const pollingIntervalsRef = useRef<Map<number, NodeJS.Timeout>>(new Map());
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -63,10 +35,18 @@ export default function Home() {
     scrollToBottom();
   }, [messages, isTyping]);
 
-  const userMessageCount = messages.filter((msg) => msg.sender === "user").length;
-  const shouldGate = !loggedIn && userMessageCount >= 3;
+  // Cleanup polling intervals on unmount
+  useEffect(() => {
+    return () => {
+      pollingIntervalsRef.current.forEach((interval) => clearInterval(interval));
+      pollingIntervalsRef.current.clear();
+    };
+  }, []);
 
   const handleNewChat = () => {
+    // Clear all polling intervals
+    pollingIntervalsRef.current.forEach((interval) => clearInterval(interval));
+    pollingIntervalsRef.current.clear();
     setMessages([]);
     setInput("");
     setActiveChatId(undefined);
@@ -74,15 +54,88 @@ export default function Home() {
 
   const handleSelectChat = (chatId: string) => {
     setActiveChatId(chatId);
-    // In a real app, this would load the chat history
-    // For now, we'll just highlight it
   };
 
-  const handleSend = async () => {
-    const userMessage = input.trim();
-    if (!userMessage || isTyping || shouldGate) return;
+  const pollVideoStatus = async (messageIndex: number, jobId: string) => {
+    const interval = setInterval(async () => {
+      try {
+        const data = await api.getVideo(jobId);
 
-    // Add user message
+        if (data.status === "ready" && data.video_url) {
+          // Video is ready, update the message
+          setMessages((prev) => {
+            const updated = [...prev];
+            if (updated[messageIndex]) {
+              updated[messageIndex] = {
+                ...updated[messageIndex],
+                videoUrl: data.video_url,
+                videoStatus: "ready",
+                videoJobId: undefined,
+              };
+            }
+            return updated;
+          });
+
+          // Stop polling
+          clearInterval(interval);
+          pollingIntervalsRef.current.delete(messageIndex);
+        } else if (data.status === "failed") {
+          // Video generation failed
+          setMessages((prev) => {
+            const updated = [...prev];
+            if (updated[messageIndex]) {
+              updated[messageIndex] = {
+                ...updated[messageIndex],
+                videoStatus: "failed",
+                videoJobId: undefined,
+              };
+            }
+            return updated;
+          });
+
+          // Stop polling
+          clearInterval(interval);
+          pollingIntervalsRef.current.delete(messageIndex);
+        } else {
+          // Update status (pending or processing)
+          setMessages((prev) => {
+            const updated = [...prev];
+            if (updated[messageIndex]) {
+              updated[messageIndex] = {
+                ...updated[messageIndex],
+                videoStatus: data.status,
+              };
+            }
+            return updated;
+          });
+          // Continue polling for "pending" or "processing"
+        }
+      } catch (error) {
+        // Error polling, mark as failed and stop
+        setMessages((prev) => {
+          const updated = [...prev];
+          if (updated[messageIndex]) {
+            updated[messageIndex] = {
+              ...updated[messageIndex],
+              videoStatus: "failed",
+              videoJobId: undefined,
+            };
+          }
+          return updated;
+        });
+        clearInterval(interval);
+        pollingIntervalsRef.current.delete(messageIndex);
+      }
+    }, 2000); // Poll every 2 seconds
+
+    pollingIntervalsRef.current.set(messageIndex, interval);
+  };
+
+  const handleSend = async (wantVideo: boolean = false) => {
+    const userMessage = input.trim();
+    if (!userMessage || isTyping) return;
+
+    // Add user message immediately (optimistic UI)
     const newUserMessage: Message = { sender: "user", message: userMessage };
     setMessages((prev) => [...prev, newUserMessage]);
     setInput("");
@@ -90,19 +143,7 @@ export default function Home() {
 
     try {
       // Call API
-      const response = await fetch("http://localhost:8000/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ message: userMessage }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to get response");
-      }
-
-      const data = await response.json();
+      const data = await api.chat(userMessage, wantVideo && isAuthenticated);
       const mayaMessage = data.text || "Hmm, something's not right...";
 
       // Simulate typing delay (600-900ms)
@@ -110,13 +151,32 @@ export default function Home() {
       await new Promise((resolve) => setTimeout(resolve, delay));
 
       // Add MAYA's response
-      const newMayaMessage: Message = { sender: "maya", message: mayaMessage };
-      setMessages((prev) => [...prev, newMayaMessage]);
+      const newMayaMessage: Message = {
+        sender: "maya",
+        message: mayaMessage,
+      };
+
+      // If video_job_id is returned, start polling
+      if (data.video_job_id) {
+        newMayaMessage.videoJobId = data.video_job_id;
+        newMayaMessage.videoStatus = "pending";
+        setMessages((prev) => {
+          const updated = [...prev, newMayaMessage];
+          const messageIndex = updated.length - 1;
+          // Start polling for video status immediately
+          setTimeout(() => {
+            pollVideoStatus(messageIndex, data.video_job_id);
+          }, 100);
+          return updated;
+        });
+      } else {
+        setMessages((prev) => [...prev, newMayaMessage]);
+      }
     } catch (error) {
-      // Playful error message
+      // User-safe error message
       const errorMessage: Message = {
         sender: "maya",
-        message: "Something's playing hard to get... try again?",
+        message: error instanceof Error ? error.message : "Something's playing hard to get... try again?",
       };
       const delay = Math.random() * 300 + 600;
       await new Promise((resolve) => setTimeout(resolve, delay));
@@ -126,13 +186,9 @@ export default function Home() {
     }
   };
 
-  if (!mounted) {
-    return null;
-  }
-
   return (
     <>
-      <Sidebar 
+      <Sidebar
         activeChatId={activeChatId}
         onNewChat={handleNewChat}
         onSelectChat={handleSelectChat}
@@ -142,6 +198,18 @@ export default function Home() {
         <header className="text-neonPink text-2xl font-semibold tracking-widest drop-shadow-[0_0_10px_#ff4ecd]">
           MAYA
         </header>
+
+        {/* Free Mode Banner */}
+        {!isAuthenticated && (
+          <div className="w-full max-w-2xl mb-2 px-4 py-2 rounded-lg bg-black/40 border border-neonPurple/30 text-center">
+            <span className="text-sm text-gray-400">
+              Login to unlock video generation.{" "}
+              <Link href="/login" className="text-neonPink hover:text-neonPurple transition-colors underline">
+                Sign in
+              </Link>
+            </span>
+          </div>
+        )}
 
         {/* Chat area */}
         <section
@@ -158,7 +226,13 @@ export default function Home() {
           ) : (
             <>
               {messages.map((msg, index) => (
-                <ChatBubble key={index} sender={msg.sender} message={msg.message} />
+                <ChatBubble
+                  key={index}
+                  sender={msg.sender}
+                  message={msg.message}
+                  videoUrl={msg.videoUrl}
+                  videoStatus={msg.videoStatus}
+                />
               ))}
               {isTyping && <TypingIndicator />}
               <div ref={messagesEndRef} />
@@ -171,28 +245,9 @@ export default function Home() {
           value={input}
           onChange={setInput}
           onSubmit={handleSend}
-          disabled={isTyping || shouldGate}
+          disabled={isTyping}
+          allowVideo={isAuthenticated}
         />
-
-        {/* Gate Overlay */}
-        {shouldGate && (
-          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-30 flex items-center justify-center">
-            <div className="rounded-2xl bg-black/80 border border-neonPurple/50 px-8 py-10 shadow-[0_0_40px_rgba(176,38,255,0.5)] backdrop-blur-sm max-w-md mx-4">
-              <h2 className="text-2xl font-semibold text-neonPink mb-4 text-center drop-shadow-[0_0_10px_#ff4ecd]">
-                Sign in to continue with Maya
-              </h2>
-              <p className="text-gray-400 text-center mb-6 text-sm">
-                You've reached the free message limit. Sign in to keep chatting.
-              </p>
-              <Link
-                href="/login"
-                className="block w-full rounded-lg px-6 py-3 bg-gradient-to-r from-neonPurple to-neonPink text-black font-medium shadow-[0_0_20px_rgba(255,78,205,0.6)] hover:shadow-[0_0_30px_rgba(255,78,205,0.8)] transition-all text-center"
-              >
-                Sign In
-              </Link>
-            </div>
-          </div>
-        )}
       </main>
     </>
   );
